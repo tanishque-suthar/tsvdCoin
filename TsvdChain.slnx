@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="TsvdChain.Api/TsvdChain.Api.csproj" />
+  <Project Path="TsvdChain.Core/TsvdChain.Core.csproj" />
+  <Project Path="TsvdChain.P2P/TsvdChain.P2P.csproj" />
+  <Project Path="TsvdChain.Tests/TsvdChain.Tests.csproj" />
+</Solution>

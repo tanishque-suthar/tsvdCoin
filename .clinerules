@@ -1,0 +1,42 @@
+# tsvdChain Agentic Rules
+
+## Technical Stack
+- Framework: .NET 10 (Preview/Final)
+- Communication: SignalR (Stateful Reconnects enabled)
+- Language: C# 14 (Use field-backed properties and Span<byte> for hashing)
+
+## Tool Orchestration Logic
+1. ALWAYS use `sequentialthinking` before implementing new P2P logic to map out race conditions.
+2. If a .NET 10 syntax error occurs, prioritize `context7` for library-specific documentation.
+3. Use `git` for local atomic commits; use `github` for issue tracking and PR management.
+
+## SignalR Implementation Rules
+- Use `HubLifetimeManager<THub>` for distributed peer tracking across instances
+- Implement `IHubFilter` for connection validation and message signing
+- Set `MaximumParallelInvocationsPerClient = 1` to prevent race conditions
+- Use `GroupManager` for blockchain sync groups (not individual client tracking)
+
+## Blockchain Constraints
+- Peer discovery should be decentralized; avoid hardcoding IPs.
+- All blocks must be immutable (use C# 14 Records) with `init` accessors
+- SHA256 hashing via `System.Security.Cryptography` with `Span<byte>` for zero-allocation
+- Implement `IAsyncDisposable` on mining services for graceful shutdown
+- Use `ConcurrentDictionary` for mempool with `TryUpdate` for double-spend protection
+- Implement a SeedNodeOptions configuration for initial entry, but transition to a GossipService to discover new peers from existing connections.
+
+## Testing Strategy
+- Create xUnit tests with `TestContainer` for isolated blockchain instances
+- Use `Microsoft.AspNetCore.TestHost` with `WebApplicationFactory` for SignalR integration tests
+- Simulate network partitions with custom `HubConnection` that can drop messages
+
+## MCP Server Integration
+- **sequentialthinking**: ALWAYS use before implementing P2P sync or fork resolution
+- **github**: Create draft PR early, link issues to commits; uses `@modelcontextprotocol/server-github`
+- **context7**: Query for .NET 10 SignalR patterns when stuck
+- **fetch-docs**: Pull latest SignalR bleeding-edge docs before implementation
+- **tavily-mcp**: Web search, extract, map, and crawl capabilities; use for real-time research
+
+## Critical: Avoid SignalR Hub Being Stateful
+- Hub instances are transient (created per invocation)
+- Store peer connections in a singleton `PeerConnectionService`
+- Use `IHubContext` to broadcast to all peers, not `Clients.All` inside Hub
