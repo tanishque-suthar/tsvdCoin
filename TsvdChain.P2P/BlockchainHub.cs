@@ -13,16 +13,19 @@ public class BlockchainHub : Hub
 {
     private readonly PeerConnectionService _peerService;
     private readonly ILogger<BlockchainHub> _logger;
-    
+    private readonly IBlockchainNodeService _nodeService;
+
     // Using IHubContext for broadcasting (not Clients.All inside Hub)
     private readonly IHubContext<BlockchainHub> _hubContext;
 
     public BlockchainHub(
         PeerConnectionService peerService,
+        IBlockchainNodeService nodeService,
         IHubContext<BlockchainHub> hubContext,
         ILogger<BlockchainHub> logger)
     {
         _peerService = peerService;
+        _nodeService = nodeService;
         _hubContext = hubContext;
         _logger = logger;
     }
@@ -32,13 +35,13 @@ public class BlockchainHub : Hub
     /// </summary>
     public override async Task OnConnectedAsync()
     {
-        var nodeId = Context.GetHttpContext()?.Request.Query["nodeId"].ToString() 
+        var nodeId = Context.GetHttpContext()?.Request.Query["nodeId"].ToString()
             ?? Context.ConnectionId;
-        
+
         _peerService.AddPeer(Context.ConnectionId, nodeId);
-        _logger.LogInformation("Peer connected: {NodeId}, Total peers: {Count}", 
+        _logger.LogInformation("Peer connected: {NodeId}, Total peers: {Count}",
             nodeId, _peerService.PeerCount);
-        
+
         await base.OnConnectedAsync();
     }
 
@@ -48,9 +51,9 @@ public class BlockchainHub : Hub
     public override async Task OnDisconnectedAsync(Exception? exception)
     {
         _peerService.RemovePeer(Context.ConnectionId);
-        _logger.LogInformation("Peer disconnected: {ConnectionId}, Total peers: {Count}", 
+        _logger.LogInformation("Peer disconnected: {ConnectionId}, Total peers: {Count}",
             Context.ConnectionId, _peerService.PeerCount);
-        
+
         await base.OnDisconnectedAsync(exception);
     }
 
@@ -62,7 +65,7 @@ public class BlockchainHub : Hub
         var groupName = $"sync-{blockHeight}";
         _peerService.AddToSyncGroup(Context.ConnectionId, groupName);
         await Groups.AddToGroupAsync(Context.ConnectionId, groupName);
-        _logger.LogInformation("Peer {ConnectionId} joined sync group {Group}", 
+        _logger.LogInformation("Peer {ConnectionId} joined sync group {Group}",
             Context.ConnectionId, groupName);
     }
 
@@ -73,6 +76,23 @@ public class BlockchainHub : Hub
     {
         await _hubContext.Clients.All.SendAsync("ReceiveBlock", block);
         _logger.LogDebug("Broadcast block {Index} to all peers", block.Index);
+    }
+
+    /// <summary>
+    /// Submit a block from a peer to this node. If accepted, broadcast to others.
+    /// </summary>
+    public async Task SubmitBlock(Block block)
+    {
+        if (await _nodeService.TryAcceptBlockAsync(block))
+        {
+            await Clients.Others.SendAsync("ReceiveBlock", block);
+            _logger.LogInformation("Accepted and rebroadcast block {Index} from peer {ConnectionId}", block.Index, Context.ConnectionId);
+        }
+        else
+        {
+            _logger.LogWarning("Block {Index} from peer {ConnectionId} rejected, requesting chain sync", block.Index, Context.ConnectionId);
+            await RequestChainSync();
+        }
     }
 
     /// <summary>
@@ -87,8 +107,9 @@ public class BlockchainHub : Hub
     /// <summary>
     /// Send the current blockchain state to the requesting peer.
     /// </summary>
-    public async Task SendChain(IEnumerable<Block> chain)
+    public async Task SendChain()
     {
+        var chain = _nodeService.GetChain();
         await Clients.Caller.SendAsync("ReceiveChain", chain);
     }
 
