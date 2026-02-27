@@ -1,8 +1,11 @@
 using Microsoft.AspNetCore.SignalR.Client;
 using TsvdChain.Api;
 using TsvdChain.Core.Blockchain;
+using TsvdChain.Core.Mempool;
+using TsvdChain.Core.Mining;
 using TsvdChain.P2P;
 using TsvdChain.P2P.Configuration;
+using TsvdChain.Api.Dto;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -14,6 +17,11 @@ builder.Services.Configure<SeedNodeOptions>(
     builder.Configuration.GetSection(SeedNodeOptions.SectionName));
 
 builder.Services.AddSingleton<Blockchain>(_ => Blockchain.CreateWithGenesis());
+builder.Services.AddSingleton<MempoolService>();
+builder.Services.AddSingleton<MinerService>(sp => new MinerService(
+    sp.GetRequiredService<Blockchain>(),
+    sp.GetRequiredService<MempoolService>(),
+    builder.Configuration.GetValue<int>("Blockchain:Difficulty", 3)));
 builder.Services.AddSingleton<IBlockchainStore, JsonBlockchainStore>();
 builder.Services.AddSingleton<BlockchainNodeService>();
 builder.Services.AddSingleton<PeerConnectionService>();
@@ -98,5 +106,37 @@ if (seedOptions is not null)
         });
     }
 }
+
+// Wire mempool and miner into node service
+var nodeService = app.Services.GetRequiredService<BlockchainNodeService>();
+nodeService.Mempool = app.Services.GetRequiredService<MempoolService>();
+nodeService.Miner = app.Services.GetRequiredService<MinerService>();
+
+
+// API endpoints for mempool and miner
+app.MapPost("/tx", (BlockchainNodeService node, TxDto dto) =>
+{
+    var tx = Transaction.Create(dto.From, dto.To, dto.Amount, dto.Signature);
+    if (node.Mempool?.AddTransaction(tx) == true)
+        return Results.Accepted(tx.Id);
+    return Results.Conflict();
+});
+
+app.MapGet("/mempool", (BlockchainNodeService node) =>
+{
+    return Results.Ok(node.Mempool?.GetTransactions() ?? Array.Empty<Transaction>());
+});
+
+app.MapPost("/miner/start", (BlockchainNodeService node) =>
+{
+    node.Miner?.Start();
+    return Results.Accepted();
+});
+
+app.MapPost("/miner/stop", (BlockchainNodeService node) =>
+{
+    node.Miner?.Stop();
+    return Results.Accepted();
+});
 
 app.Run();

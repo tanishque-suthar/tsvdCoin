@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using TsvdChain.Core.Blockchain;
+using TsvdChain.Core.Mempool;
+using TsvdChain.Core.Mining;
 
 namespace TsvdChain.Api;
 
@@ -64,6 +66,10 @@ public sealed class BlockchainNodeService
         _logger = logger;
         _difficulty = configuration.GetValue("Blockchain:Difficulty", 3);
     }
+
+    // Expose mempool and miner for integration.
+    public MempoolService? Mempool { get; set; }
+    public MinerService? Miner { get; set; }
 
     public IReadOnlyList<Block> GetChain()
     {
