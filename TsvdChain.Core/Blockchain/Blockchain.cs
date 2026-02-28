@@ -32,6 +32,18 @@ public sealed class Blockchain
             }
         }
 
+        // Validate coinbase reward against consensus rules.
+        if (block.Index > 0 && !Consensus.ValidateCoinbase(block))
+        {
+            return false;
+        }
+
+        // Validate PoW difficulty (genesis exempt — it has a zero nonce).
+        if (block.Index > 0 && !Consensus.ValidateDifficulty(block))
+        {
+            return false;
+        }
+
         _chain.Add(block);
         return true;
     }
@@ -78,6 +90,8 @@ public sealed class Blockchain
         for (int i = 1; i < chain.Count; i++)
         {
             if (chain[i].PreviousHash != chain[i - 1].Hash) return false;
+            if (!Consensus.ValidateCoinbase(chain[i])) return false;
+            if (!Consensus.ValidateDifficulty(chain[i])) return false;
         }
         return true;
     }

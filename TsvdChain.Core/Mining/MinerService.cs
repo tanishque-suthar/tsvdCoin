@@ -19,23 +19,17 @@ public sealed class MinerService : IAsyncDisposable
     private readonly MempoolService _mempool;
     private readonly CancellationTokenSource _cts = new();
 
-    private readonly int _difficulty;
     private readonly string _rewardAddress;
-    private readonly long _blockReward;
     private Task? _miningTask;
 
     public MinerService(
         TsvdChain.Core.Blockchain.Blockchain blockchain,
         MempoolService mempool,
-        int difficulty = 3,
-        string rewardAddress = "system",
-        long blockReward = 50)
+        string rewardAddress = "system")
     {
         _blockchain = blockchain;
         _mempool = mempool;
-        _difficulty = difficulty;
         _rewardAddress = rewardAddress;
-        _blockReward = blockReward;
     }
 
     public void Start()
@@ -52,7 +46,7 @@ public sealed class MinerService : IAsyncDisposable
 
     private async Task MiningLoop()
     {
-        var prefix = new string('0', _difficulty);
+        var prefix = new string('0', Consensus.Difficulty);
 
         while (!_cts.IsCancellationRequested)
         {
@@ -64,8 +58,9 @@ public sealed class MinerService : IAsyncDisposable
 
                 var txs = _mempool.GetTransactions(100).ToList();
 
-                // Prepend coinbase reward transaction.
-                var coinbase = Transaction.CreateSystemTransaction(_rewardAddress, _blockReward);
+                // Prepend coinbase reward transaction (amount from consensus rules).
+                var reward = Consensus.GetBlockReward(index);
+                var coinbase = Transaction.CreateSystemTransaction(_rewardAddress, reward);
                 txs.Insert(0, coinbase);
 
                 var txList = txs.AsReadOnly();

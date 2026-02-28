@@ -54,21 +54,14 @@ public sealed class BlockchainNodeService : TsvdChain.P2P.IBlockchainNodeService
     private readonly ILogger<BlockchainNodeService> _logger;
     private readonly object _lock = new();
 
-    // Simple PoW difficulty: number of leading '0' characters required in hex hash.
-    private readonly int _difficulty;
-    private readonly long _blockReward;
-
     public BlockchainNodeService(
         Blockchain blockchain,
         IBlockchainStore store,
-        ILogger<BlockchainNodeService> logger,
-        IConfiguration configuration)
+        ILogger<BlockchainNodeService> logger)
     {
         _blockchain = blockchain;
         _store = store;
         _logger = logger;
-        _difficulty = configuration.GetValue("Blockchain:Difficulty", 3);
-        _blockReward = configuration.GetValue<long>("Blockchain:BlockReward", 50);
     }
 
     // Expose mempool and miner for integration.
@@ -108,9 +101,10 @@ public sealed class BlockchainNodeService : TsvdChain.P2P.IBlockchainNodeService
 
             var txs = (Mempool?.GetTransactions(100) ?? []).ToList();
 
-            // Prepend coinbase reward.
+            // Prepend coinbase reward (amount from consensus rules).
             var rewardAddress = Wallet?.PublicKeyHex ?? "system";
-            var coinbase = Transaction.CreateSystemTransaction(rewardAddress, _blockReward);
+            var reward = Consensus.GetBlockReward(index);
+            var coinbase = Transaction.CreateSystemTransaction(rewardAddress, reward);
             txs.Insert(0, coinbase);
 
             var txList = txs.AsReadOnly();
@@ -118,7 +112,7 @@ public sealed class BlockchainNodeService : TsvdChain.P2P.IBlockchainNodeService
             var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
             var nonce = 0;
-            var prefix = new string('0', _difficulty);
+            var prefix = new string('0', Consensus.Difficulty);
 
             // PoW loop: hash raw header values, zero allocations per iteration.
             while (true)

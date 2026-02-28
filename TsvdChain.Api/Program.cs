@@ -48,9 +48,7 @@ builder.Services.AddSingleton<MempoolService>();
 builder.Services.AddSingleton<MinerService>(sp => new MinerService(
     sp.GetRequiredService<Blockchain>(),
     sp.GetRequiredService<MempoolService>(),
-    builder.Configuration.GetValue<int>("Blockchain:Difficulty", 3),
-    sp.GetRequiredService<KeyPair>().PublicKeyHex,
-    builder.Configuration.GetValue<long>("Blockchain:BlockReward", 50)));
+    sp.GetRequiredService<KeyPair>().PublicKeyHex));
 builder.Services.AddSingleton<IBlockchainStore, JsonBlockchainStore>();
 builder.Services.AddSingleton<BlockchainNodeService>();
 builder.Services.AddSingleton<TsvdChain.P2P.IBlockchainNodeService>(sp => sp.GetRequiredService<BlockchainNodeService>());
