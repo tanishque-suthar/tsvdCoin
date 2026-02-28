@@ -1,5 +1,4 @@
 using TsvdChain.Core.Blockchain;
-using TsvdChain.Core.Hashing;
 
 namespace TsvdChain.Tests;
 
@@ -28,24 +27,21 @@ public class BlockchainTests
     {
         var blockchain = Blockchain.CreateWithGenesis();
         var genesis = blockchain.GetLatestBlock()!;
-        var next = Block.Create(genesis.Index + 1, genesis.Hash, new[] { Transaction.Create("alice", "bob", 10) });
+        var block1 = Block.Create(genesis.Index + 1, genesis.Hash, new[] { Transaction.Create("alice", "bob", 10) });
+        var block2 = Block.Create(block1.Index + 1, block1.Hash, new[] { Transaction.Create("bob", "carol", 5) });
 
-        Assert.True(blockchain.AddBlock(next));
+        Assert.True(blockchain.AddBlock(block1));
+        Assert.True(blockchain.AddBlock(block2));
         Assert.True(blockchain.IsValid());
 
-        // Tamper with block by changing hash field via new instance.
-        var tampered = next with { Hash = Sha256Hasher.ComputeHashString("different") };
+        // Tamper: replace block1 with a different block (Block.Create gives it a valid hash,
+        // but its hash differs from the original block1.Hash, breaking block2's PreviousHash link).
+        var tamperedBlock1 = Block.Create(block1.Index, genesis.Hash,
+            new[] { Transaction.Create("alice", "eve", 999) });
 
-        var chainList = blockchain.Chain.ToList();
-        chainList[1] = tampered;
+        var tamperedChain = blockchain.Chain.ToList();
+        tamperedChain[1] = tamperedBlock1; // tamperedBlock1.Hash != block1.Hash → block2 link broken
 
-        // Rebuild blockchain from tampered list to test validation.
-        var rebuilt = new Blockchain();
-        foreach (var block in chainList)
-        {
-            rebuilt.AddBlock(block);
-        }
-
-        Assert.False(rebuilt.IsValid());
+        Assert.False(Blockchain.IsValidChain(tamperedChain.AsReadOnly()));
     }
 }

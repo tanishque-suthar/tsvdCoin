@@ -11,7 +11,10 @@ var builder = WebApplication.CreateBuilder(args);
 
 // Services
 builder.Services.AddOpenApi();
-builder.Services.AddSignalR();
+builder.Services.AddSignalR(options =>
+{
+    options.MaximumParallelInvocationsPerClient = 1;
+});
 
 builder.Services.Configure<SeedNodeOptions>(
     builder.Configuration.GetSection(SeedNodeOptions.SectionName));
@@ -24,6 +27,7 @@ builder.Services.AddSingleton<MinerService>(sp => new MinerService(
     builder.Configuration.GetValue<int>("Blockchain:Difficulty", 3)));
 builder.Services.AddSingleton<IBlockchainStore, JsonBlockchainStore>();
 builder.Services.AddSingleton<BlockchainNodeService>();
+builder.Services.AddSingleton<TsvdChain.P2P.IBlockchainNodeService>(sp => sp.GetRequiredService<BlockchainNodeService>());
 builder.Services.AddSingleton<PeerConnectionService>();
 
 var app = builder.Build();
@@ -65,6 +69,9 @@ app.MapGet("/peers", (PeerConnectionService peers) =>
 // SignalR hub
 app.MapHub<BlockchainHub>("/blockchainHub");
 
+// Load persisted blockchain from store before accepting traffic.
+await app.Services.GetRequiredService<BlockchainNodeService>().InitializeFromStoreAsync();
+
 // Optional seed-node bootstrap for initial sync.
 var seedOptions = app.Services.GetService<IConfiguration>()?.GetSection("SeedNodes");
 if (seedOptions is not null)
@@ -86,17 +93,18 @@ if (seedOptions is not null)
                         .WithAutomaticReconnect()
                         .Build();
 
+                    // Register handler BEFORE starting to avoid receiving response before handler is registered.
+                    connection.On<IEnumerable<Block>>("ReceiveChain", async chain =>
+                    {
+                        await nodeService.TryReplaceChainAsync(chain);
+                    });
+
                     await connection.StartAsync();
 
                     logger.LogInformation("Connected to seed node {NodeUrl}", nodeUrl);
 
                     // Request chain sync from seed node.
                     await connection.InvokeAsync("RequestChainSync");
-
-                    connection.On<IEnumerable<Block>>("ReceiveChain", async chain =>
-                    {
-                        await nodeService.TryReplaceChainAsync(chain);
-                    });
                 }
                 catch (Exception ex)
                 {
@@ -116,6 +124,11 @@ nodeService.Miner = app.Services.GetRequiredService<MinerService>();
 // API endpoints for mempool and miner
 app.MapPost("/tx", (BlockchainNodeService node, TxDto dto) =>
 {
+    if (string.IsNullOrWhiteSpace(dto.From) || string.IsNullOrWhiteSpace(dto.To))
+        return Results.BadRequest("From and To addresses must not be empty.");
+    if (dto.Amount <= 0)
+        return Results.BadRequest("Amount must be greater than zero.");
+
     var tx = Transaction.Create(dto.From, dto.To, dto.Amount, dto.Signature);
     if (node.Mempool?.AddTransaction(tx) == true)
         return Results.Accepted(tx.Id);
