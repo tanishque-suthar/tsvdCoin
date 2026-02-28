@@ -104,6 +104,28 @@ public sealed class BlockchainNodeService : TsvdChain.P2P.IBlockchainNodeService
         }
     }
 
+    /// <summary>
+    /// Compute the balance for an address by scanning all transactions on the chain.
+    /// </summary>
+    public long GetBalance(string address)
+    {
+        lock (_lock)
+        {
+            long balance = 0;
+            foreach (var block in _blockchain.Chain)
+            {
+                foreach (var tx in block.Transactions)
+                {
+                    if (tx.To == address)
+                        balance += tx.Amount;
+                    if (tx.From == address)
+                        balance -= tx.Amount;
+                }
+            }
+            return balance;
+        }
+    }
+
     public async Task<Block> MineBlockAsync(CancellationToken cancellationToken = default)
     {
         if (Miner is null)

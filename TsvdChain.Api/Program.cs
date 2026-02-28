@@ -166,6 +166,18 @@ nodeService.Wallet = app.Services.GetRequiredService<KeyPair>();
 // API endpoints for mempool and miner
 app.MapGet("/address", (KeyPair kp) => Results.Ok(new { Address = kp.PublicKeyHex }));
 
+app.MapGet("/balance/{address}", (BlockchainNodeService node, string address) =>
+{
+    var balance = node.GetBalance(address);
+    return Results.Ok(new { Address = address, Balance = balance });
+});
+
+app.MapGet("/balance", (BlockchainNodeService node, KeyPair kp) =>
+{
+    var balance = node.GetBalance(kp.PublicKeyHex);
+    return Results.Ok(new { Address = kp.PublicKeyHex, Balance = balance });
+});
+
 app.MapPost("/tx", (BlockchainNodeService node, TxDto dto) =>
 {
     if (string.IsNullOrWhiteSpace(dto.From) || string.IsNullOrWhiteSpace(dto.To))
