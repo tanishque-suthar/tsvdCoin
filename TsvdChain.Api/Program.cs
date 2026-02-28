@@ -178,35 +178,6 @@ app.MapGet("/balance", (BlockchainNodeService node, KeyPair kp) =>
     return Results.Ok(new { Address = kp.PublicKeyHex, Balance = balance });
 });
 
-app.MapPost("/tx", (BlockchainNodeService node, TxDto dto) =>
-{
-    if (string.IsNullOrWhiteSpace(dto.From) || string.IsNullOrWhiteSpace(dto.To))
-        return Results.BadRequest("From and To addresses must not be empty.");
-    if (dto.Amount <= 0)
-        return Results.BadRequest("Amount must be greater than zero.");
-    if (string.IsNullOrWhiteSpace(dto.Signature))
-        return Results.BadRequest("Signature is required.");
-
-    // Reconstruct transaction from pre-signed DTO fields.
-    var tx = new Transaction
-    {
-        From = dto.From,
-        To = dto.To,
-        Amount = dto.Amount,
-        Timestamp = dto.Timestamp,
-        Signature = dto.Signature,
-        Id = dto.Id
-    };
-
-    if (!tx.ValidateSignature())
-        return Results.BadRequest("Invalid signature.");
-
-    if (node.Mempool?.AddTransaction(tx) == true)
-        return Results.Accepted(null, tx);
-    return Results.Conflict("Transaction already in mempool.");
-});
-
-// Convenience: sign a transaction with this node's wallet and add to mempool.
 app.MapPost("/tx/send", (BlockchainNodeService node, KeyPair kp, SendTxDto dto) =>
 {
     if (string.IsNullOrWhiteSpace(dto.To))
