@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using TsvdChain.Core.Blockchain;
+using TsvdChain.Core.Crypto;
 using TsvdChain.Core.Hashing;
 using TsvdChain.Core.Mempool;
 using TsvdChain.Core.Mining;
@@ -55,6 +56,7 @@ public sealed class BlockchainNodeService : TsvdChain.P2P.IBlockchainNodeService
 
     // Simple PoW difficulty: number of leading '0' characters required in hex hash.
     private readonly int _difficulty;
+    private readonly long _blockReward;
 
     public BlockchainNodeService(
         Blockchain blockchain,
@@ -66,11 +68,17 @@ public sealed class BlockchainNodeService : TsvdChain.P2P.IBlockchainNodeService
         _store = store;
         _logger = logger;
         _difficulty = configuration.GetValue("Blockchain:Difficulty", 3);
+        _blockReward = configuration.GetValue<long>("Blockchain:BlockReward", 50);
     }
 
     // Expose mempool and miner for integration.
     public MempoolService? Mempool { get; set; }
     public MinerService? Miner { get; set; }
+
+    /// <summary>
+    /// The wallet key pair, set at startup after unlocking/creating the wallet.
+    /// </summary>
+    public KeyPair? Wallet { get; set; }
 
     public IReadOnlyList<Block> GetChain()
     {
@@ -98,8 +106,14 @@ public sealed class BlockchainNodeService : TsvdChain.P2P.IBlockchainNodeService
             var index = latest.Index + 1;
             var previousHash = latest.Hash;
 
-            var txs = Mempool?.GetTransactions(100) ?? [];
-            var txList = txs.ToList().AsReadOnly();
+            var txs = (Mempool?.GetTransactions(100) ?? []).ToList();
+
+            // Prepend coinbase reward.
+            var rewardAddress = Wallet?.PublicKeyHex ?? "system";
+            var coinbase = Transaction.CreateSystemTransaction(rewardAddress, _blockReward);
+            txs.Insert(0, coinbase);
+
+            var txList = txs.AsReadOnly();
             var merkleRoot = MerkleTree.ComputeMerkleRoot(txList.Select(t => t.Id));
             var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 

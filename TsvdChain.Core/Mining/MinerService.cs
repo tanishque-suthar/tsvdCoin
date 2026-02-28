@@ -20,13 +20,22 @@ public sealed class MinerService : IAsyncDisposable
     private readonly CancellationTokenSource _cts = new();
 
     private readonly int _difficulty;
+    private readonly string _rewardAddress;
+    private readonly long _blockReward;
     private Task? _miningTask;
 
-    public MinerService(TsvdChain.Core.Blockchain.Blockchain blockchain, MempoolService mempool, int difficulty = 3)
+    public MinerService(
+        TsvdChain.Core.Blockchain.Blockchain blockchain,
+        MempoolService mempool,
+        int difficulty = 3,
+        string rewardAddress = "system",
+        long blockReward = 50)
     {
         _blockchain = blockchain;
         _mempool = mempool;
         _difficulty = difficulty;
+        _rewardAddress = rewardAddress;
+        _blockReward = blockReward;
     }
 
     public void Start()
@@ -53,8 +62,13 @@ public sealed class MinerService : IAsyncDisposable
                 var index = latest.Index + 1;
                 var previousHash = latest.Hash;
 
-                var txs = _mempool.GetTransactions(100);
-                var txList = txs.ToList().AsReadOnly();
+                var txs = _mempool.GetTransactions(100).ToList();
+
+                // Prepend coinbase reward transaction.
+                var coinbase = Transaction.CreateSystemTransaction(_rewardAddress, _blockReward);
+                txs.Insert(0, coinbase);
+
+                var txList = txs.AsReadOnly();
                 var merkleRoot = MerkleTree.ComputeMerkleRoot(txList.Select(t => t.Id));
                 var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
