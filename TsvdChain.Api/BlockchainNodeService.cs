@@ -1,10 +1,12 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
+using Microsoft.AspNetCore.SignalR;
+using Microsoft.AspNetCore.SignalR.Client;
 using TsvdChain.Core.Blockchain;
 using TsvdChain.Core.Crypto;
-using TsvdChain.Core.Hashing;
 using TsvdChain.Core.Mempool;
 using TsvdChain.Core.Mining;
+using TsvdChain.P2P;
 
 namespace TsvdChain.Api;
 
@@ -52,16 +54,29 @@ public sealed class BlockchainNodeService : TsvdChain.P2P.IBlockchainNodeService
     private readonly Blockchain _blockchain;
     private readonly IBlockchainStore _store;
     private readonly ILogger<BlockchainNodeService> _logger;
+    private readonly IHubContext<BlockchainHub> _hubContext;
     private readonly object _lock = new();
+    private readonly ConcurrentBag<HubConnection> _outboundConnections = new();
 
     public BlockchainNodeService(
         Blockchain blockchain,
         IBlockchainStore store,
-        ILogger<BlockchainNodeService> logger)
+        ILogger<BlockchainNodeService> logger,
+        IHubContext<BlockchainHub> hubContext)
     {
         _blockchain = blockchain;
         _store = store;
         _logger = logger;
+        _hubContext = hubContext;
+    }
+
+    /// <summary>
+    /// Register an outbound SignalR connection (e.g. to a seed node)
+    /// so mined blocks can be broadcast to it.
+    /// </summary>
+    public void AddOutboundConnection(HubConnection connection)
+    {
+        _outboundConnections.Add(connection);
     }
 
     // Expose mempool and miner for integration.
@@ -91,69 +106,51 @@ public sealed class BlockchainNodeService : TsvdChain.P2P.IBlockchainNodeService
 
     public async Task<Block> MineBlockAsync(CancellationToken cancellationToken = default)
     {
-        Block newBlock;
+        if (Miner is null)
+            throw new InvalidOperationException("Miner is not configured.");
 
-        lock (_lock)
-        {
-            var latest = _blockchain.GetLatestBlock()!;
-            var index = latest.Index + 1;
-            var previousHash = latest.Hash;
+        var newBlock = await Miner.MineOneBlockAsync(cancellationToken).ConfigureAwait(false);
 
-            var txs = (Mempool?.GetTransactions(100) ?? []).ToList();
-
-            // Prepend coinbase reward (amount from consensus rules).
-            var rewardAddress = Wallet?.PublicKeyHex ?? "system";
-            var reward = Consensus.GetBlockReward(index);
-            var coinbase = Transaction.CreateSystemTransaction(rewardAddress, reward);
-            txs.Insert(0, coinbase);
-
-            var txList = txs.AsReadOnly();
-            var merkleRoot = MerkleTree.ComputeMerkleRoot(txList.Select(t => t.Id));
-            var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-
-            var nonce = 0;
-            var prefix = new string('0', Consensus.Difficulty);
-
-            // PoW loop: hash raw header values, zero allocations per iteration.
-            while (true)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                var hash = Sha256Hasher.ComputeHashString($"{index}{timestamp}{previousHash}{merkleRoot}{nonce}");
-                if (hash.StartsWith(prefix, StringComparison.Ordinal))
-                {
-                    newBlock = new Block
-                    {
-                        Index = index,
-                        Timestamp = timestamp,
-                        PreviousHash = previousHash,
-                        Transactions = txList,
-                        MerkleRoot = merkleRoot,
-                        Nonce = nonce
-                    };
-                    break;
-                }
-
-                nonce++;
-            }
-
-            if (!_blockchain.AddBlock(newBlock))
-            {
-                throw new InvalidOperationException("Failed to add mined block to local blockchain.");
-            }
-
-            // Remove mined transactions from mempool.
-            foreach (var tx in txList)
-            {
-                Mempool?.RemoveTransaction(tx.Id);
-            }
-
-            _logger.LogInformation("Mined new block {Index} with hash {Hash}", newBlock.Index, newBlock.Hash);
-        }
+        _logger.LogInformation("Mined new block {Index} with hash {Hash}", newBlock.Index, newBlock.Hash);
 
         await PersistAsync(cancellationToken).ConfigureAwait(false);
 
+        // Broadcast the new block to all peers.
+        await BroadcastBlockAsync(newBlock).ConfigureAwait(false);
+
         return newBlock;
+    }
+
+    /// <summary>
+    /// Broadcasts a block to all connected peers (inbound hub clients + outbound seed connections).
+    /// </summary>
+    private async Task BroadcastBlockAsync(Block block)
+    {
+        // Inbound peers connected to our SignalR hub.
+        try
+        {
+            await _hubContext.Clients.All.SendAsync("ReceiveBlock", block);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to broadcast block {Index} to hub clients", block.Index);
+        }
+
+        // Outbound connections (seed nodes we connected to as a client).
+        foreach (var conn in _outboundConnections)
+        {
+            try
+            {
+                if (conn.State == HubConnectionState.Connected)
+                {
+                    await conn.InvokeAsync("SubmitBlock", block);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to broadcast block {Index} to outbound peer", block.Index);
+            }
+        }
     }
 
     public async Task<bool> TryAcceptBlockAsync(Block block, CancellationToken cancellationToken = default)
