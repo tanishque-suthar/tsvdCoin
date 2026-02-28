@@ -1,0 +1,29 @@
+services:
+  node1:
+    build: .
+    container_name: tsvdchain-node1
+    ports:
+      - "5001:8080"
+    environment:
+      - Wallet__Password=node1secret
+      - SeedNodes__EnableSeedNodes=false
+    volumes:
+      - node1-data:/app/Data
+
+  node2:
+    build: .
+    container_name: tsvdchain-node2
+    ports:
+      - "5002:8080"
+    environment:
+      - Wallet__Password=node2secret
+      - SeedNodes__EnableSeedNodes=true
+      - SeedNodes__Nodes__0=http://node1:8080
+    volumes:
+      - node2-data:/app/Data
+    depends_on:
+      - node1
+
+volumes:
+  node1-data:
+  node2-data:
