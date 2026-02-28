@@ -21,7 +21,7 @@ public sealed class Blockchain
     }
 
     /// <summary>
-    /// Adds a block to the chain. The block is validated before adding.
+    /// Adds a block to the chain. Rejects the block if previous hash or self-hash is invalid.
     /// </summary>
     public bool AddBlock(Block block)
     {
@@ -36,11 +36,21 @@ public sealed class Blockchain
 
         if (!block.ValidateHash())
         {
-            return false; // Invalid block hash
+            return false; // Tampered or corrupt block
         }
 
         _chain.Add(block);
         return true;
+    }
+
+    /// <summary>
+    /// Replaces the entire chain with <paramref name="newChain"/>. No validation is performed —
+    /// the caller must validate before calling this method.
+    /// </summary>
+    public void ReplaceChain(IEnumerable<Block> newChain)
+    {
+        _chain.Clear();
+        _chain.AddRange(newChain);
     }
 
     /// <summary>
@@ -67,6 +77,20 @@ public sealed class Blockchain
             {
                 return false;
             }
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Validates an arbitrary list of blocks without modifying any chain instance.
+    /// Useful for pre-validating a candidate chain before replacement.
+    /// </summary>
+    public static bool IsValidChain(IReadOnlyList<Block> chain)
+    {
+        for (int i = 1; i < chain.Count; i++)
+        {
+            if (!chain[i].ValidateHash()) return false;
+            if (chain[i].PreviousHash != chain[i - 1].Hash) return false;
         }
         return true;
     }
