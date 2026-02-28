@@ -15,6 +15,11 @@ public sealed class MempoolService
 
     public bool AddTransaction(Transaction tx)
     {
+        if (!tx.ValidateSignature())
+        {
+            return false;
+        }
+
         return _txs.TryAdd(tx.Id, tx);
     }
 
