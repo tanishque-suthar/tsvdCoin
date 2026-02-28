@@ -19,7 +19,7 @@ builder.Services.AddSignalR(options =>
 builder.Services.Configure<SeedNodeOptions>(
     builder.Configuration.GetSection(SeedNodeOptions.SectionName));
 
-builder.Services.AddSingleton<Blockchain>(_ => Blockchain.CreateWithGenesis());
+builder.Services.AddSingleton<Blockchain>();
 builder.Services.AddSingleton<MempoolService>();
 builder.Services.AddSingleton<MinerService>(sp => new MinerService(
     sp.GetRequiredService<Blockchain>(),
@@ -51,9 +51,9 @@ app.MapGet("/latest-block", (BlockchainNodeService node) =>
     return latest is null ? Results.NotFound() : Results.Ok(latest);
 });
 
-app.MapPost("/mine", async (BlockchainNodeService node, string data, CancellationToken ct) =>
+app.MapPost("/mine", async (BlockchainNodeService node, CancellationToken ct) =>
 {
-    var block = await node.MineBlockAsync(data, ct);
+    var block = await node.MineBlockAsync(ct);
     return Results.Ok(block);
 });
 

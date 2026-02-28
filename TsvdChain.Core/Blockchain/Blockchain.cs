@@ -10,18 +10,16 @@ public sealed class Blockchain
     public IReadOnlyList<Block> Chain => _chain.AsReadOnly();
 
     /// <summary>
-    /// Creates a new blockchain with the genesis block.
+    /// Initializes the blockchain with the hardcoded genesis block.
     /// </summary>
-    public static Blockchain CreateWithGenesis(string genesisData = "Genesis Block - tsvdChain")
+    public Blockchain()
     {
-        var blockchain = new Blockchain();
-        var genesisBlock = Block.CreateGenesis(genesisData);
-        blockchain.AddBlock(genesisBlock);
-        return blockchain;
+        _chain.Add(Block.Genesis);
     }
 
     /// <summary>
-    /// Adds a block to the chain. Rejects the block if previous hash or self-hash is invalid.
+    /// Adds a block to the chain. Rejects the block if previous hash linkage is invalid.
+    /// Hash is always computed from block contents (never stored), so no separate hash validation needed.
     /// </summary>
     public bool AddBlock(Block block)
     {
@@ -32,11 +30,6 @@ public sealed class Blockchain
             {
                 return false; // Invalid previous hash
             }
-        }
-
-        if (!block.ValidateHash())
-        {
-            return false; // Tampered or corrupt block
         }
 
         _chain.Add(block);
@@ -72,11 +65,6 @@ public sealed class Blockchain
             {
                 return false;
             }
-
-            if (!currentBlock.ValidateHash())
-            {
-                return false;
-            }
         }
         return true;
     }
@@ -89,7 +77,6 @@ public sealed class Blockchain
     {
         for (int i = 1; i < chain.Count; i++)
         {
-            if (!chain[i].ValidateHash()) return false;
             if (chain[i].PreviousHash != chain[i - 1].Hash) return false;
         }
         return true;

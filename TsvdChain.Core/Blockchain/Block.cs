@@ -16,28 +16,20 @@ public sealed record class Block
     public required IReadOnlyList<Transaction> Transactions { get; init; }
     public required string MerkleRoot { get; init; }
     public required int Nonce { get; init; }
-    public required string Hash { get; init; }
 
     /// <summary>
-    /// Creates a new block and computes its MerkleRoot and hash.
+    /// Block hash, derived from header fields. Never stored — always computed, just like Bitcoin.
     /// </summary>
-    public static Block Create(int index, string previousHash, string data, int nonce = 0)
-    {
-        // Backwards-compatible overload: wrap string data into a single-system transaction.
-        var tx = Transaction.Create("system", data, 0);
-        return Create(index, previousHash, new[] { tx }, nonce);
-    }
+    public string Hash => Sha256Hasher.ComputeHashString($"{Index}{Timestamp}{PreviousHash}{MerkleRoot}{Nonce}");
 
     /// <summary>
-    /// Creates a new block and computes its MerkleRoot and hash.
+    /// Creates a new block and computes its MerkleRoot.
     /// </summary>
     public static Block Create(int index, string previousHash, IEnumerable<Transaction>? transactions, int nonce = 0)
     {
         var txList = (transactions ?? Enumerable.Empty<Transaction>()).ToList().AsReadOnly();
         var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         var merkleRoot = MerkleTree.ComputeMerkleRoot(txList.Select(t => t.Id));
-        var content = $"{index}{timestamp}{previousHash}{merkleRoot}{nonce}";
-        var hash = Sha256Hasher.ComputeHashString(content);
 
         return new Block
         {
@@ -46,44 +38,43 @@ public sealed record class Block
             PreviousHash = previousHash,
             Transactions = txList,
             MerkleRoot = merkleRoot,
-            Nonce = nonce,
-            Hash = hash
+            Nonce = nonce
         };
     }
 
     /// <summary>
-    /// Creates the genesis block (block index 0).
+    /// The one and only genesis block. Deterministic and identical across all nodes.
     /// </summary>
-    public static Block CreateGenesis(string data = "Genesis Block - tsvdChain")
-    {
-        const string genesisPreviousHash = "0000000000000000000000000000000000000000000000000000000000000000";
-        // Represent genesis as a single transaction carrying the genesis data in To field.
-        var genesisTx = Transaction.Create("system", "genesis", 0, signature: null) with { };
-        return Create(0, genesisPreviousHash, new[] { genesisTx }, 0);
-    }
+    public static readonly Block Genesis = CreateGenesisInternal();
 
-    /// <summary>
-    /// Validates the block's hash.
-    /// </summary>
-    public bool ValidateHash()
+    private static Block CreateGenesisInternal()
     {
-        var content = $"{Index}{Timestamp}{PreviousHash}{MerkleRoot}{Nonce}";
-        var computedHash = Sha256Hasher.ComputeHashString(content);
-        return Hash == computedHash;
-    }
+        const string previousHash = "0000000000000000000000000000000000000000000000000000000000000000";
+        const long timestamp = 0L;
+        const int nonce = 0;
 
-    /// <summary>
-    /// Creates a new block with updated nonce (for mining).
-    /// </summary>
-    public Block WithNonce(int newNonce)
-    {
-        var content = $"{Index}{Timestamp}{PreviousHash}{MerkleRoot}{newNonce}";
-        var hash = Sha256Hasher.ComputeHashString(content);
-
-        return this with
+        var genesisTx = new Transaction
         {
-            Nonce = newNonce,
-            Hash = hash
+            From = "system",
+            To = "genesis",
+            Amount = 0,
+            Timestamp = 0,
+            Signature = null,
+            Id = Sha256Hasher.ComputeHashString("systemgenesis00")
+        };
+
+        var txList = new List<Transaction> { genesisTx }.AsReadOnly();
+        var merkleRoot = MerkleTree.ComputeMerkleRoot(txList.Select(t => t.Id));
+
+        return new Block
+        {
+            Index = 0,
+            Timestamp = timestamp,
+            PreviousHash = previousHash,
+            Transactions = txList,
+            MerkleRoot = merkleRoot,
+            Nonce = nonce
         };
     }
+
 }
