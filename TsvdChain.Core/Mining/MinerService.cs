@@ -2,6 +2,8 @@ using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using TsvdChain.Core.Blockchain;
+using TsvdChain.Core.Hashing;
 using TsvdChain.Core.Mempool;
 
 namespace TsvdChain.Core.Mining;
@@ -47,21 +49,35 @@ public sealed class MinerService : IAsyncDisposable
         {
             try
             {
-                var latest = _blockchain.GetLatestBlock() ?? TsvdChain.Core.Blockchain.Block.CreateGenesis();
+                var latest = _blockchain.GetLatestBlock()!;
                 var index = latest.Index + 1;
-                var previous = latest.Hash;
+                var previousHash = latest.Hash;
 
                 var txs = _mempool.GetTransactions(100);
+                var txList = txs.ToList().AsReadOnly();
+                var merkleRoot = MerkleTree.ComputeMerkleRoot(txList.Select(t => t.Id));
+                var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
                 var nonce = 0;
 
                 while (!_cts.IsCancellationRequested)
                 {
-                    var candidate = TsvdChain.Core.Blockchain.Block.Create(index, previous, txs, nonce);
-                    if (candidate.Hash.StartsWith(prefix, StringComparison.Ordinal))
+                    var hash = Sha256Hasher.ComputeHashString($"{index}{timestamp}{previousHash}{merkleRoot}{nonce}");
+                    if (hash.StartsWith(prefix, StringComparison.Ordinal))
                     {
-                        if (_blockchain.AddBlock(candidate))
+                        // Only create the block once a valid nonce is found.
+                        var block = new Block
                         {
-                            // Remove included transactions from mempool
+                            Index = index,
+                            Timestamp = timestamp,
+                            PreviousHash = previousHash,
+                            Transactions = txList,
+                            MerkleRoot = merkleRoot,
+                            Nonce = nonce
+                        };
+
+                        if (_blockchain.AddBlock(block))
+                        {
                             foreach (var tx in txs)
                             {
                                 _mempool.RemoveTransaction(tx.Id);

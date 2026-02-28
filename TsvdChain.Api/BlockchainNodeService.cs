@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using TsvdChain.Core.Blockchain;
+using TsvdChain.Core.Hashing;
 using TsvdChain.Core.Mempool;
 using TsvdChain.Core.Mining;
 
@@ -87,28 +88,41 @@ public sealed class BlockchainNodeService : TsvdChain.P2P.IBlockchainNodeService
         }
     }
 
-    public async Task<Block> MineBlockAsync(string data, CancellationToken cancellationToken = default)
+    public async Task<Block> MineBlockAsync(CancellationToken cancellationToken = default)
     {
         Block newBlock;
 
         lock (_lock)
         {
-            var latest = _blockchain.GetLatestBlock() ?? Block.CreateGenesis();
+            var latest = _blockchain.GetLatestBlock()!;
             var index = latest.Index + 1;
             var previousHash = latest.Hash;
+
+            var txs = Mempool?.GetTransactions(100) ?? [];
+            var txList = txs.ToList().AsReadOnly();
+            var merkleRoot = MerkleTree.ComputeMerkleRoot(txList.Select(t => t.Id));
+            var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
             var nonce = 0;
             var prefix = new string('0', _difficulty);
 
-            // Basic Proof-of-Work loop; not optimized for high throughput.
+            // PoW loop: hash raw header values, zero allocations per iteration.
             while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                var candidate = Block.Create(index, previousHash, data, nonce);
-                if (candidate.Hash.StartsWith(prefix, StringComparison.Ordinal))
+                var hash = Sha256Hasher.ComputeHashString($"{index}{timestamp}{previousHash}{merkleRoot}{nonce}");
+                if (hash.StartsWith(prefix, StringComparison.Ordinal))
                 {
-                    newBlock = candidate;
+                    newBlock = new Block
+                    {
+                        Index = index,
+                        Timestamp = timestamp,
+                        PreviousHash = previousHash,
+                        Transactions = txList,
+                        MerkleRoot = merkleRoot,
+                        Nonce = nonce
+                    };
                     break;
                 }
 
@@ -118,6 +132,12 @@ public sealed class BlockchainNodeService : TsvdChain.P2P.IBlockchainNodeService
             if (!_blockchain.AddBlock(newBlock))
             {
                 throw new InvalidOperationException("Failed to add mined block to local blockchain.");
+            }
+
+            // Remove mined transactions from mempool.
+            foreach (var tx in txList)
+            {
+                Mempool?.RemoveTransaction(tx.Id);
             }
 
             _logger.LogInformation("Mined new block {Index} with hash {Hash}", newBlock.Index, newBlock.Hash);
