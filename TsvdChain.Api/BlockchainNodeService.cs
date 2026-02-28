@@ -45,7 +45,7 @@ public sealed class JsonBlockchainStore : IBlockchainStore
     }
 }
 
-public sealed class BlockchainNodeService
+public sealed class BlockchainNodeService : TsvdChain.P2P.IBlockchainNodeService
 {
     private readonly Blockchain _blockchain;
     private readonly IBlockchainStore _store;
@@ -161,34 +161,24 @@ public sealed class BlockchainNodeService
             return false;
         }
 
-        var temp = Blockchain.CreateWithGenesis();
-        temp = new Blockchain();
-
-        foreach (var block in remoteList)
+        // Validate the remote chain without touching the live chain.
+        if (!Blockchain.IsValidChain(remoteList.AsReadOnly()))
         {
-            if (!temp.AddBlock(block))
-            {
-                _logger.LogWarning("Remote chain rejected during validation at block {Index}", block.Index);
-                return false;
-            }
+            _logger.LogWarning("Remote chain failed structural validation; rejecting.");
+            return false;
         }
 
         lock (_lock)
         {
-            if (remoteList.Count <= _blockchain.Chain.Count || !temp.IsValid())
+            if (remoteList.Count <= _blockchain.Chain.Count)
             {
-                return false;
+                return false; // Not longer than current chain.
             }
 
-            // Replace internal list via reflection of public API: clear + re-add.
-            var current = _blockchain.Chain.ToList();
-            foreach (var _ in current)
-            {
-                // No direct clear method; recreate blockchain instead.
-            }
+            _blockchain.ReplaceChain(remoteList);
         }
 
-        // Persist remote chain as the new canonical chain.
+        // Persist the new canonical chain.
         await _store.SaveAsync(remoteList.AsReadOnly(), cancellationToken).ConfigureAwait(false);
 
         _logger.LogInformation("Replaced local chain with remote chain of length {Length}", remoteList.Count);
@@ -203,26 +193,15 @@ public sealed class BlockchainNodeService
             return;
         }
 
-        var temp = new Blockchain();
-        foreach (var block in storedChain)
+        if (!Blockchain.IsValidChain(storedChain))
         {
-            if (!temp.AddBlock(block))
-            {
-                _logger.LogWarning("Stored chain invalid at block {Index}; ignoring persisted chain.", block.Index);
-                return;
-            }
+            _logger.LogWarning("Stored chain failed validation; ignoring persisted chain.");
+            return;
         }
 
         lock (_lock)
         {
-            if (!temp.IsValid())
-            {
-                _logger.LogWarning("Stored chain failed validation; ignoring persisted chain.");
-                return;
-            }
-
-            // As Blockchain does not expose mutation APIs, we accept the stored chain
-            // as canonical only via persistence; runtime instance will grow from genesis.
+            _blockchain.ReplaceChain(storedChain);
         }
 
         _logger.LogInformation("Loaded blockchain from store with {Length} blocks", storedChain.Count);
