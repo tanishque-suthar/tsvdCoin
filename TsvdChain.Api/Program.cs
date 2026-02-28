@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.SignalR.Client;
+using Microsoft.Extensions.Options;
 using TsvdChain.Api;
 using TsvdChain.Core.Blockchain;
 using TsvdChain.Core.Crypto;
@@ -97,46 +98,62 @@ app.MapHub<BlockchainHub>("/blockchainHub");
 await app.Services.GetRequiredService<BlockchainNodeService>().InitializeFromStoreAsync();
 
 // Optional seed-node bootstrap for initial sync.
-var seedOptions = app.Services.GetService<IConfiguration>()?.GetSection("SeedNodes");
-if (seedOptions is not null)
+var seedOptions = app.Services.GetRequiredService<IOptions<SeedNodeOptions>>().Value;
+if (seedOptions.EnableSeedNodes && seedOptions.Nodes.Count > 0)
 {
-    var nodes = seedOptions.Get<string[]>() ?? Array.Empty<string>();
-    if (nodes.Length > 0)
+    _ = Task.Run(async () =>
     {
-        _ = Task.Run(async () =>
+        var logger = app.Services.GetRequiredService<ILogger<Program>>();
+        var nodeService = app.Services.GetRequiredService<BlockchainNodeService>();
+
+        foreach (var nodeUrl in seedOptions.Nodes)
         {
-            var logger = app.Services.GetRequiredService<ILogger<Program>>();
-            var nodeService = app.Services.GetRequiredService<BlockchainNodeService>();
-
-            foreach (var nodeUrl in nodes)
+            try
             {
-                try
-                {
-                    var connection = new HubConnectionBuilder()
-                        .WithUrl($"{nodeUrl}/blockchainHub")
-                        .WithAutomaticReconnect()
-                        .Build();
+                var connection = new HubConnectionBuilder()
+                    .WithUrl($"{nodeUrl}/blockchainHub")
+                    .WithAutomaticReconnect()
+                    .Build();
 
-                    // Register handler BEFORE starting to avoid receiving response before handler is registered.
-                    connection.On<IEnumerable<Block>>("ReceiveChain", async chain =>
+                // Handle full chain sync responses.
+                connection.On<IEnumerable<Block>>("ReceiveChain", async chain =>
+                {
+                    await nodeService.TryReplaceChainAsync(chain);
+                });
+
+                // Handle individual block broadcasts from peers.
+                connection.On<Block>("ReceiveBlock", async block =>
+                {
+                    if (await nodeService.TryAcceptBlockAsync(block))
                     {
-                        await nodeService.TryReplaceChainAsync(chain);
-                    });
+                        logger.LogInformation("Accepted block {Index} from seed peer {Url}", block.Index, nodeUrl);
+                    }
+                });
 
-                    await connection.StartAsync();
-
-                    logger.LogInformation("Connected to seed node {NodeUrl}", nodeUrl);
-
-                    // Request chain sync from seed node.
-                    await connection.InvokeAsync("RequestChainSync");
-                }
-                catch (Exception ex)
+                // Handle chain requests from the remote hub.
+                connection.On("RequestChain", async () =>
                 {
-                    logger.LogWarning(ex, "Failed to connect to seed node {NodeUrl}", nodeUrl);
-                }
+                    var chain = nodeService.GetChain();
+                    await connection.InvokeAsync("SubmitChain", chain);
+                });
+
+                await connection.StartAsync();
+
+                // Store connection so we can broadcast to it later.
+                nodeService.AddOutboundConnection(connection);
+
+                logger.LogInformation("Connected to seed node {NodeUrl}", nodeUrl);
+
+                // Request initial chain sync — SendChain sends the
+                // remote node's chain back to us via ReceiveChain.
+                await connection.InvokeAsync("SendChain");
             }
-        });
-    }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Failed to connect to seed node {NodeUrl}", nodeUrl);
+            }
+        }
+    });
 }
 
 // Wire mempool, miner, and wallet into node service
