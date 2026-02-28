@@ -15,18 +15,13 @@ public class BlockchainHub : Hub
     private readonly ILogger<BlockchainHub> _logger;
     private readonly IBlockchainNodeService _nodeService;
 
-    // Using IHubContext for broadcasting (not Clients.All inside Hub)
-    private readonly IHubContext<BlockchainHub> _hubContext;
-
     public BlockchainHub(
         PeerConnectionService peerService,
         IBlockchainNodeService nodeService,
-        IHubContext<BlockchainHub> hubContext,
         ILogger<BlockchainHub> logger)
     {
         _peerService = peerService;
         _nodeService = nodeService;
-        _hubContext = hubContext;
         _logger = logger;
     }
 
@@ -58,66 +53,34 @@ public class BlockchainHub : Hub
     }
 
     /// <summary>
-    /// Register this node for blockchain sync at a specific block height.
-    /// </summary>
-    public async Task JoinSyncGroup(int blockHeight)
-    {
-        var groupName = $"sync-{blockHeight}";
-        _peerService.AddToSyncGroup(Context.ConnectionId, groupName);
-        await Groups.AddToGroupAsync(Context.ConnectionId, groupName);
-        _logger.LogInformation("Peer {ConnectionId} joined sync group {Group}",
-            Context.ConnectionId, groupName);
-    }
-
-    /// <summary>
-    /// Broadcast a new block to all connected peers.
-    /// </summary>
-    public async Task BroadcastBlock(Block block)
-    {
-        await _hubContext.Clients.All.SendAsync("ReceiveBlock", block);
-        _logger.LogDebug("Broadcast block {Index} to all peers", block.Index);
-    }
-
-    /// <summary>
-    /// Submit a block from a peer to this node. If accepted, broadcast to others.
+    /// Submit a block from a peer to this node. If accepted, rebroadcast to other peers.
+    /// If rejected, request the submitter's full chain to resolve the fork.
     /// </summary>
     public async Task SubmitBlock(Block block)
     {
         if (await _nodeService.TryAcceptBlockAsync(block))
         {
+            // Rebroadcast to all peers except the one who sent it.
             await Clients.Others.SendAsync("ReceiveBlock", block);
-            _logger.LogInformation("Accepted and rebroadcast block {Index} from peer {ConnectionId}", block.Index, Context.ConnectionId);
+            _logger.LogInformation("Accepted and rebroadcast block {Index} from peer {ConnectionId}",
+                block.Index, Context.ConnectionId);
         }
         else
         {
-            _logger.LogWarning("Block {Index} from peer {ConnectionId} rejected, requesting chain sync", block.Index, Context.ConnectionId);
-            await RequestChainSync();
+            // Block rejected — we may be behind. Ask the submitter for their full chain.
+            _logger.LogWarning("Block {Index} from peer {ConnectionId} rejected; requesting their chain",
+                block.Index, Context.ConnectionId);
+            await Clients.Caller.SendAsync("RequestChain");
         }
-    }
-
-    /// <summary>
-    /// Request blockchain sync from peers.
-    /// </summary>
-    public async Task RequestChainSync()
-    {
-        await Clients.Others.SendAsync("RequestChain");
-        _logger.LogInformation("Requested chain sync from peers");
     }
 
     /// <summary>
     /// Send the current blockchain state to the requesting peer.
+    /// Called by a peer (or outbound client) to get our chain.
     /// </summary>
     public async Task SendChain()
     {
         var chain = _nodeService.GetChain();
         await Clients.Caller.SendAsync("ReceiveChain", chain);
-    }
-
-    /// <summary>
-    /// Announce this node's latest block height.
-    /// </summary>
-    public async Task AnnounceBlockHeight(int height)
-    {
-        await Clients.Others.SendAsync("PeerBlockHeight", Context.ConnectionId, height);
     }
 }

@@ -9,7 +9,6 @@ namespace TsvdChain.P2P;
 public sealed class PeerConnectionService
 {
     private readonly ConcurrentDictionary<string, PeerInfo> _peers = new();
-    private readonly ConcurrentDictionary<string, HashSet<string>> _syncGroups = new();
 
     /// <summary>
     /// Information about a connected peer.
@@ -42,38 +41,4 @@ public sealed class PeerConnectionService
     /// Gets peer count.
     /// </summary>
     public int PeerCount => _peers.Count;
-
-    /// <summary>
-    /// Adds a peer to a sync group for blockchain synchronization.
-    /// </summary>
-    public void AddToSyncGroup(string connectionId, string groupName)
-    {
-        _syncGroups.AddOrUpdate(
-            groupName,
-            _ => new HashSet<string> { connectionId },
-            (_, set) => { set.Add(connectionId); return set; });
-    }
-
-    /// <summary>
-    /// Removes a peer from a sync group.
-    /// </summary>
-    public void RemoveFromSyncGroup(string connectionId, string groupName)
-    {
-        if (_syncGroups.TryGetValue(groupName, out var set))
-        {
-            set.Remove(connectionId);
-        }
-    }
-
-    /// <summary>
-    /// Gets all connection IDs in a sync group.
-    /// </summary>
-    public IEnumerable<string> GetSyncGroupMembers(string groupName)
-    {
-        if (_syncGroups.TryGetValue(groupName, out var set))
-        {
-            return set.ToList();
-        }
-        return Enumerable.Empty<string>();
-    }
 }
