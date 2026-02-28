@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.SignalR.Client;
 using TsvdChain.Api;
 using TsvdChain.Core.Blockchain;
+using TsvdChain.Core.Crypto;
 using TsvdChain.Core.Mempool;
 using TsvdChain.Core.Mining;
 using TsvdChain.P2P;
@@ -19,12 +20,37 @@ builder.Services.AddSignalR(options =>
 builder.Services.Configure<SeedNodeOptions>(
     builder.Configuration.GetSection(SeedNodeOptions.SectionName));
 
+// Wallet: unlock or create on startup.
+var walletPassword = builder.Configuration["Wallet:Password"]
+    ?? throw new InvalidOperationException(
+        "Wallet password is required. Set 'Wallet:Password' in config or WALLET__PASSWORD env var.");
+
+var walletDir = Path.Combine(builder.Environment.ContentRootPath, "Data");
+var walletStore = new WalletStore(walletDir);
+KeyPair wallet;
+
+if (walletStore.WalletExists())
+{
+    wallet = walletStore.UnlockWallet(walletPassword);
+    Console.WriteLine($"Wallet unlocked. Address: {wallet.PublicKeyHex}");
+}
+else
+{
+    wallet = walletStore.CreateWallet(walletPassword);
+    Console.WriteLine($"New wallet created. Address: {wallet.PublicKeyHex}");
+}
+
+builder.Services.AddSingleton(wallet);
+builder.Services.AddSingleton(walletStore);
+
 builder.Services.AddSingleton<Blockchain>();
 builder.Services.AddSingleton<MempoolService>();
 builder.Services.AddSingleton<MinerService>(sp => new MinerService(
     sp.GetRequiredService<Blockchain>(),
     sp.GetRequiredService<MempoolService>(),
-    builder.Configuration.GetValue<int>("Blockchain:Difficulty", 3)));
+    builder.Configuration.GetValue<int>("Blockchain:Difficulty", 3),
+    sp.GetRequiredService<KeyPair>().PublicKeyHex,
+    builder.Configuration.GetValue<long>("Blockchain:BlockReward", 50)));
 builder.Services.AddSingleton<IBlockchainStore, JsonBlockchainStore>();
 builder.Services.AddSingleton<BlockchainNodeService>();
 builder.Services.AddSingleton<TsvdChain.P2P.IBlockchainNodeService>(sp => sp.GetRequiredService<BlockchainNodeService>());
@@ -115,24 +141,57 @@ if (seedOptions is not null)
     }
 }
 
-// Wire mempool and miner into node service
+// Wire mempool, miner, and wallet into node service
 var nodeService = app.Services.GetRequiredService<BlockchainNodeService>();
 nodeService.Mempool = app.Services.GetRequiredService<MempoolService>();
 nodeService.Miner = app.Services.GetRequiredService<MinerService>();
+nodeService.Wallet = app.Services.GetRequiredService<KeyPair>();
 
 
 // API endpoints for mempool and miner
+app.MapGet("/address", (KeyPair kp) => Results.Ok(new { Address = kp.PublicKeyHex }));
+
 app.MapPost("/tx", (BlockchainNodeService node, TxDto dto) =>
 {
     if (string.IsNullOrWhiteSpace(dto.From) || string.IsNullOrWhiteSpace(dto.To))
         return Results.BadRequest("From and To addresses must not be empty.");
     if (dto.Amount <= 0)
         return Results.BadRequest("Amount must be greater than zero.");
+    if (string.IsNullOrWhiteSpace(dto.Signature))
+        return Results.BadRequest("Signature is required.");
 
-    var tx = Transaction.Create(dto.From, dto.To, dto.Amount, dto.Signature);
+    // Reconstruct transaction from pre-signed DTO fields.
+    var tx = new Transaction
+    {
+        From = dto.From,
+        To = dto.To,
+        Amount = dto.Amount,
+        Timestamp = dto.Timestamp,
+        Signature = dto.Signature,
+        Id = dto.Id
+    };
+
+    if (!tx.ValidateSignature())
+        return Results.BadRequest("Invalid signature.");
+
     if (node.Mempool?.AddTransaction(tx) == true)
-        return Results.Accepted(tx.Id);
-    return Results.Conflict();
+        return Results.Accepted(null, tx);
+    return Results.Conflict("Transaction already in mempool.");
+});
+
+// Convenience: sign a transaction with this node's wallet and add to mempool.
+app.MapPost("/tx/send", (BlockchainNodeService node, KeyPair kp, SendTxDto dto) =>
+{
+    if (string.IsNullOrWhiteSpace(dto.To))
+        return Results.BadRequest("To address must not be empty.");
+    if (dto.Amount <= 0)
+        return Results.BadRequest("Amount must be greater than zero.");
+
+    var tx = Transaction.CreateSigned(kp, dto.To, dto.Amount);
+
+    if (node.Mempool?.AddTransaction(tx) == true)
+        return Results.Accepted(null, tx);
+    return Results.Conflict("Transaction already in mempool.");
 });
 
 app.MapGet("/mempool", (BlockchainNodeService node) =>
