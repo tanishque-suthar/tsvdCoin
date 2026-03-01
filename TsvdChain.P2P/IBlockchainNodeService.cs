@@ -6,5 +6,6 @@ public interface IBlockchainNodeService
 {
     IReadOnlyList<Block> GetChain();
     Task<bool> TryAcceptBlockAsync(Block block, CancellationToken cancellationToken = default);
+    bool TryAddToMempool(Transaction tx);
 }
 

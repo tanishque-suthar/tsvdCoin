@@ -105,6 +105,44 @@ public sealed class BlockchainNodeService : TsvdChain.P2P.IBlockchainNodeService
     }
 
     /// <summary>
+    /// Try to add a transaction to the mempool. Used by the hub for gossip and by the API.
+    /// </summary>
+    public bool TryAddToMempool(Transaction tx)
+    {
+        return Mempool?.AddTransaction(tx) == true;
+    }
+
+    /// <summary>
+    /// Broadcasts a transaction to all connected peers (inbound hub clients + outbound seed connections).
+    /// </summary>
+    public async Task BroadcastTransactionAsync(Transaction tx)
+    {
+        try
+        {
+            await _hubContext.Clients.All.SendAsync("ReceiveTransaction", tx);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to broadcast transaction {Id} to hub clients", tx.Id);
+        }
+
+        foreach (var conn in _outboundConnections)
+        {
+            try
+            {
+                if (conn.State == HubConnectionState.Connected)
+                {
+                    await conn.InvokeAsync("SubmitTransaction", tx);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to broadcast transaction {Id} to outbound peer", tx.Id);
+            }
+        }
+    }
+
+    /// <summary>
     /// Compute the balance for an address by scanning all transactions on the chain.
     /// </summary>
     public long GetBalance(string address)
@@ -194,6 +232,9 @@ public sealed class BlockchainNodeService : TsvdChain.P2P.IBlockchainNodeService
 
         if (added)
         {
+            // Remove confirmed transactions from the mempool.
+            Mempool?.RemoveConfirmed(block.Transactions);
+
             await PersistAsync(cancellationToken).ConfigureAwait(false);
         }
 

@@ -45,7 +45,23 @@ builder.Services.AddSingleton(wallet);
 builder.Services.AddSingleton(walletStore);
 
 builder.Services.AddSingleton<Blockchain>();
-builder.Services.AddSingleton<MempoolService>();
+builder.Services.AddSingleton<MempoolService>(sp =>
+{
+    var blockchain = sp.GetRequiredService<Blockchain>();
+    return new MempoolService(address =>
+    {
+        long balance = 0;
+        foreach (var block in blockchain.Chain)
+        {
+            foreach (var tx in block.Transactions)
+            {
+                if (tx.To == address) balance += tx.Amount;
+                if (tx.From == address) balance -= tx.Amount;
+            }
+        }
+        return balance;
+    });
+});
 builder.Services.AddSingleton<MinerService>(sp => new MinerService(
     sp.GetRequiredService<Blockchain>(),
     sp.GetRequiredService<MempoolService>(),
@@ -137,6 +153,15 @@ if (seedOptions.EnableSeedNodes && seedOptions.Nodes.Count > 0)
                     await connection.InvokeAsync("SubmitChain", chain);
                 });
 
+                // Handle transaction gossip from peers.
+                connection.On<Transaction>("ReceiveTransaction", tx =>
+                {
+                    if (nodeService.TryAddToMempool(tx))
+                    {
+                        logger.LogInformation("Accepted transaction {Id} from seed peer {Url}", tx.Id, nodeUrl);
+                    }
+                });
+
                 await connection.StartAsync();
 
                 // Store connection so we can broadcast to it later.
@@ -188,8 +213,12 @@ app.MapPost("/tx/send", (BlockchainNodeService node, KeyPair kp, SendTxDto dto) 
     var tx = Transaction.CreateSigned(kp, dto.To, dto.Amount);
 
     if (node.Mempool?.AddTransaction(tx) == true)
+    {
+        // Gossip to all peers.
+        _ = node.BroadcastTransactionAsync(tx);
         return Results.Accepted(null, tx);
-    return Results.Conflict("Transaction already in mempool.");
+    }
+    return Results.Conflict("Transaction rejected (duplicate or insufficient balance).");
 });
 
 app.MapGet("/mempool", (BlockchainNodeService node) =>

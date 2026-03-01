@@ -83,4 +83,18 @@ public class BlockchainHub : Hub
         var chain = _nodeService.GetChain();
         await Clients.Caller.SendAsync("ReceiveChain", chain);
     }
+
+    /// <summary>
+    /// Receive a transaction from a peer, add to mempool, and relay to other peers.
+    /// </summary>
+    public async Task SubmitTransaction(Transaction tx)
+    {
+        if (_nodeService.TryAddToMempool(tx))
+        {
+            // Relay to all peers except the sender.
+            await Clients.Others.SendAsync("ReceiveTransaction", tx);
+            _logger.LogInformation("Accepted and relayed transaction {Id} from peer {ConnectionId}",
+                tx.Id, Context.ConnectionId);
+        }
+    }
 }
