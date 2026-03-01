@@ -44,6 +44,12 @@ public sealed class Blockchain
             return false;
         }
 
+        // Validate that all non-coinbase transactions have sufficient balance.
+        if (block.Index > 0 && !Consensus.ValidateBalances(_chain, block))
+        {
+            return false;
+        }
+
         _chain.Add(block);
         return true;
     }
@@ -92,6 +98,10 @@ public sealed class Blockchain
             if (chain[i].PreviousHash != chain[i - 1].Hash) return false;
             if (!Consensus.ValidateCoinbase(chain[i])) return false;
             if (!Consensus.ValidateDifficulty(chain[i])) return false;
+
+            // Validate balances using all preceding blocks as context.
+            var preceding = chain.Take(i).ToList().AsReadOnly();
+            if (!Consensus.ValidateBalances(preceding, chain[i])) return false;
         }
         return true;
     }

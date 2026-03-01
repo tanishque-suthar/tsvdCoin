@@ -100,10 +100,7 @@ public sealed class MinerService : IAsyncDisposable
                 }
 
                 // Remove mined transactions from mempool.
-                foreach (var tx in txs)
-                {
-                    _mempool.RemoveTransaction(tx.Id);
-                }
+                _mempool.RemoveConfirmed(txs);
 
                 return block;
             }

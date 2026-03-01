@@ -5,13 +5,23 @@ namespace TsvdChain.Core.Mempool;
 
 /// <summary>
 /// Concurrent mempool using ConcurrentDictionary with TryUpdate semantics.
-/// Stores transactions by Id. Lightweight validation (signature placeholder) is performed by caller.
+/// Validates signature and balance before accepting transactions.
 /// </summary>
 public sealed class MempoolService
 {
     private readonly ConcurrentDictionary<string, Transaction> _txs = new();
+    private readonly Func<string, long> _getConfirmedBalance;
 
     public int Count => _txs.Count;
+
+    /// <param name="getConfirmedBalance">
+    /// Returns the confirmed on-chain balance for a given address.
+    /// Used to reject transactions that would overdraw an account.
+    /// </param>
+    public MempoolService(Func<string, long> getConfirmedBalance)
+    {
+        _getConfirmedBalance = getConfirmedBalance;
+    }
 
     public bool AddTransaction(Transaction tx)
     {
@@ -20,21 +30,39 @@ public sealed class MempoolService
             return false;
         }
 
-        return _txs.TryAdd(tx.Id, tx);
-    }
-
-    public bool TryUpdateTransaction(string id, Transaction newTx)
-    {
-        if (_txs.TryGetValue(id, out var existing))
+        // System (coinbase) transactions skip balance check.
+        if (tx.From != Consensus.CoinbaseFrom)
         {
-            return _txs.TryUpdate(id, newTx, existing);
+            var confirmedBalance = _getConfirmedBalance(tx.From);
+
+            // Also account for pending mempool transactions from the same sender.
+            var pendingSpend = _txs.Values
+                .Where(t => t.From == tx.From)
+                .Sum(t => t.Amount);
+
+            if (tx.Amount > confirmedBalance - pendingSpend)
+            {
+                return false; // Insufficient balance
+            }
         }
-        return false;
+
+        return _txs.TryAdd(tx.Id, tx);
     }
 
     public bool RemoveTransaction(string id)
     {
         return _txs.TryRemove(id, out _);
+    }
+
+    /// <summary>
+    /// Remove all transactions present in the given block (they are now confirmed).
+    /// </summary>
+    public void RemoveConfirmed(IEnumerable<Transaction> confirmed)
+    {
+        foreach (var tx in confirmed)
+        {
+            _txs.TryRemove(tx.Id, out _);
+        }
     }
 
     public IReadOnlyList<Transaction> GetTransactions(int max = 100)
