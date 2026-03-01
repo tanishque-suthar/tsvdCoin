@@ -1,6 +1,7 @@
 using TsvdChain.Core.Blockchain;
 using TsvdChain.Core.Crypto;
 using TsvdChain.Core.Hashing;
+using TsvdChain.Core.Mempool;
 
 namespace TsvdChain.Tests;
 
@@ -173,5 +174,92 @@ public class BlockchainTests
 
         var mined = MineTestBlock(1, genesis.Hash, new[] { Transaction.CreateSystemTransaction("miner", 50) });
         Assert.True(Consensus.ValidateDifficulty(mined));
+    }
+
+    [Fact]
+    public void Blockchain_Should_Reject_Block_With_Overspending_Transaction()
+    {
+        using var sender = KeyPair.Generate();
+        var blockchain = new Blockchain();
+        var genesis = blockchain.GetLatestBlock()!;
+
+        // Mine block 1: sender gets 50 coins
+        var block1 = MineTestBlock(1, genesis.Hash, new[] { Transaction.CreateSystemTransaction(sender.PublicKeyHex, 50) });
+        Assert.True(blockchain.AddBlock(block1));
+
+        // Block 2: sender tries to spend 100 (only has 50)
+        var overspend = Transaction.CreateSigned(sender, "recipient", 100);
+        var block2 = MineTestBlock(2, block1.Hash, new[]
+        {
+            Transaction.CreateSystemTransaction("miner", 50),
+            overspend
+        });
+
+        Assert.False(blockchain.AddBlock(block2));
+    }
+
+    [Fact]
+    public void Blockchain_Should_Accept_Block_With_Valid_Spend()
+    {
+        using var sender = KeyPair.Generate();
+        var blockchain = new Blockchain();
+        var genesis = blockchain.GetLatestBlock()!;
+
+        // Mine block 1: sender gets 50 coins
+        var block1 = MineTestBlock(1, genesis.Hash, new[] { Transaction.CreateSystemTransaction(sender.PublicKeyHex, 50) });
+        Assert.True(blockchain.AddBlock(block1));
+
+        // Block 2: sender spends 30 (has 50)
+        var validTx = Transaction.CreateSigned(sender, "recipient", 30);
+        var block2 = MineTestBlock(2, block1.Hash, new[]
+        {
+            Transaction.CreateSystemTransaction("miner", 50),
+            validTx
+        });
+
+        Assert.True(blockchain.AddBlock(block2));
+    }
+
+    [Fact]
+    public void Mempool_Should_Reject_Transaction_With_Insufficient_Balance()
+    {
+        using var sender = KeyPair.Generate();
+
+        // Balance function: sender has 10 coins
+        var mempool = new MempoolService(addr => addr == sender.PublicKeyHex ? 10L : 0L);
+
+        var tx = Transaction.CreateSigned(sender, "recipient", 50);
+        Assert.False(mempool.AddTransaction(tx));
+    }
+
+    [Fact]
+    public void Mempool_Should_Accept_Transaction_With_Sufficient_Balance()
+    {
+        using var sender = KeyPair.Generate();
+
+        var mempool = new MempoolService(addr => addr == sender.PublicKeyHex ? 100L : 0L);
+
+        var tx = Transaction.CreateSigned(sender, "recipient", 50);
+        Assert.True(mempool.AddTransaction(tx));
+    }
+
+    [Fact]
+    public void Mempool_Should_Account_For_Pending_Transactions()
+    {
+        using var sender = KeyPair.Generate();
+
+        // Sender has 50 confirmed coins
+        var mempool = new MempoolService(addr => addr == sender.PublicKeyHex ? 50L : 0L);
+
+        var tx1 = Transaction.CreateSigned(sender, "alice", 30);
+        Assert.True(mempool.AddTransaction(tx1));
+
+        // Second tx: 30 > 50 - 30 (remaining is 20)
+        var tx2 = Transaction.CreateSigned(sender, "bob", 30);
+        Assert.False(mempool.AddTransaction(tx2));
+
+        // But 20 should be fine
+        var tx3 = Transaction.CreateSigned(sender, "bob", 20);
+        Assert.True(mempool.AddTransaction(tx3));
     }
 }
